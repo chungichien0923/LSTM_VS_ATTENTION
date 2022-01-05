@@ -79,17 +79,17 @@ class LSTM(nn.Module):
         return output
 
 # %%
-def train_under_config(forex_data,
-                       length_input_sequence,
-                       num_epochs,
-                       num_hidden_layers,
-                       num_hidden_sizes,
-                       batch_sizes,
-                       device):
+def train_under_config_and_evaluating_at_num_epochs_list(forex_data,
+                                                         length_input_sequence,
+                                                         num_epochs_list,
+                                                         num_hidden_layers,
+                                                         num_hidden_sizes,
+                                                         batch_sizes,
+                                                         device):
     '''
     forex_data,
     length_input_sequence,
-    num_epochs,
+    num_epochs_list,
     learning_rate,
     num_hidden_layers,
     num_hidden_sizes,
@@ -98,20 +98,34 @@ def train_under_config(forex_data,
     '''
     # setseed
     SetSeed(9527)
-    # dataset
+    
+    # dataset_train
     training_data = forex_data.loc['1981-01-01':'2008-12-31']
     training_dataset = TimeSeriesDataset(training_data, length_input_sequence)
-    # dataloader
+    # dataset_valid
+    validation_start_index = len(forex_data.loc['1981-01-01':'2008-12-31']) - length_input_sequence
+    validation_end_index = len(forex_data.loc['1981-01-01':'2016-12-31'])
+    validation_data = forex_data[validation_start_index:validation_end_index]
+    validation_dataset = TimeSeriesDataset(validation_data, length_input_sequence)
+    
+    # dataloader_train
     training_dataloader = DataLoader(training_dataset, batch_size=batch_sizes, shuffle=True)
+    # dataloader_valid
+    validation_dataloader = DataLoader(validation_dataset, batch_size=batch_sizes, shuffle=False)
+    
     # model
     model = LSTM(num_hidden_layers, num_hidden_sizes).double()
     # criterion & optimizer
     criterion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters())
-    # training
-    model.to(device)
-    model.train()
-    for epoch in range(num_epochs):
+    
+    # training & evaluating
+    min_valid_loss_at_best_epoch = 100000
+    min_valid_loss_epoch = 0
+    for epoch in tqdm(range(num_epochs_list[-1])):
+        # training
+        model.to(device)
+        model.train()
         for X, y in training_dataloader:
             optimizer.zero_grad()
             X, y = X.to(device), y.to(device)
@@ -119,42 +133,25 @@ def train_under_config(forex_data,
             loss = criterion(ypred, y)
             loss.backward()
             optimizer.step()
+            
+        # evaluating
+        if (epoch + 1) in num_epochs_list:
+            model.eval()
+            valid_loss = 0
+            len_valid = 0
+            for X, y in  validation_dataloader:
+                len_valid += len(X)
+                X, y = X.to(device), y.to(device)
+                with torch.no_grad():
+                    ypred = model(X)
+                    loss = criterion(ypred, y)
+                valid_loss += loss.detach().cpu().item() * len(X)
+            valid_loss = valid_loss / len_valid
+            if valid_loss < min_valid_loss_at_best_epoch:
+                min_valid_loss_at_best_epoch = valid_loss
+                min_valid_loss_epoch = epoch + 1
     
-    return model
-
-# %%
-def evaluating(forex_data, length_input_sequence, batch_sizes, model, device):
-    '''
-    forex_data,
-    length_input_sequence,
-    batch_sizes,
-    model,
-    device
-    '''
-    # dataset
-    validation_start_index = len(forex_data.loc['1981-01-01':'2008-12-31']) - length_input_sequence
-    validation_end_index = len(forex_data.loc['1981-01-01':'2016-12-31'])
-    validation_data = forex_data[validation_start_index:validation_end_index]
-    validation_dataset = TimeSeriesDataset(validation_data, length_input_sequence)
-    # dataloader
-    validation_dataloader = DataLoader(validation_dataset, batch_size=batch_sizes, shuffle=False)
-    # criterion
-    criterion = nn.MSELoss()
-    # evaluating
-    model.to(device)
-    model.eval()
-    valid_loss = 0
-    len_valid = 0
-    for X, y in  validation_dataloader:
-        len_valid += len(X)
-        X, y = X.to(device), y.to(device)
-        with torch.no_grad():
-            ypred = model(X)
-            loss = criterion(ypred, y)
-        valid_loss += loss.detach().cpu().item() * len(X)
-    valid_loss = valid_loss / len_valid
-
-    return valid_loss
+    return min_valid_loss_epoch, min_valid_loss_at_best_epoch
 
 # %%
 def find_optimum_config_under_specific_input_length(forex_data,
@@ -169,33 +166,23 @@ def find_optimum_config_under_specific_input_length(forex_data,
     for num_hidden_layers in num_hidden_layers_list:
         for num_hidden_sizes in num_hidden_sizes_list:
             for batch_sizes in batch_sizes_list:
-                for num_epochs in num_epochs_list:
+                print('\nTraining under config:', (num_hidden_layers, num_hidden_sizes, batch_sizes))
+                min_valid_loss_epoch, min_valid_loss_at_best_epoch = train_under_config_and_evaluating_at_num_epochs_list(forex_data,
+                                                                                                                          length_input_sequence,
+                                                                                                                          num_epochs_list,
+                                                                                                                          num_hidden_layers,
+                                                                                                                          num_hidden_sizes,
+                                                                                                                          batch_sizes,
+                                                                                                                          device)
+                if min_valid_loss_at_best_epoch < min_valid_loss:
+                    min_valid_loss = min_valid_loss_at_best_epoch
+                    min_valid_config_under_specific_input_length = (num_hidden_layers, num_hidden_sizes, batch_sizes, min_valid_loss_epoch)
 
-                    print('\nTraining under config:', (num_hidden_layers, num_hidden_sizes, batch_sizes, num_epochs))
-                    
-                    model = train_under_config(forex_data,
-                                               length_input_sequence,
-                                               num_epochs,
-                                               num_hidden_layers,
-                                               num_hidden_sizes,
-                                               batch_sizes,
-                                               device
-                                               )
-                    valid_loss = evaluating(forex_data,
-                                            length_input_sequence,
-                                            batch_sizes,
-                                            model,
-                                            device
-                                            )
-                    if valid_loss < min_valid_loss:
-                        min_valid_loss = valid_loss
-                        min_valid_config_under_specific_input_length = (num_hidden_layers, num_hidden_sizes, batch_sizes, num_epochs)
-
-                        print('\nvalid_loss improve to',
-                              min_valid_loss,
-                              'under config:',
-                              min_valid_config_under_specific_input_length,
-                              '(num_hidden_layers, num_hidden_sizes, batch_sizes, num_epochs)')
+                    print('\nvalid_loss improve to',
+                            min_valid_loss,
+                            'under config:',
+                            min_valid_config_under_specific_input_length,
+                            '(num_hidden_layers, num_hidden_sizes, batch_sizes, num_epochs)')
 
     print('\nmin valid loss config under specific input length',
           length_input_sequence,
