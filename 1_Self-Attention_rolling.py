@@ -59,7 +59,7 @@ class TimeSeriesDataset(Dataset):
 
 # %%
 class Self_Attention(nn.Module):
-    def __init__(self, num_layers, hidden_size):
+    def __init__(self, num_layers, hidden_size, length_input_sequence):
         super().__init__()
         self.num_layers = num_layers
         
@@ -71,6 +71,11 @@ class Self_Attention(nn.Module):
 
         self.OutputLayer = nn.Linear(hidden_size, 1)
 
+        # generate mask
+        mask = (torch.triu(torch.ones(length_input_sequence, length_input_sequence)) == 1).transpose(0, 1)
+        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0)).to(device)
+        self.register_buffer('mask', mask)
+
     def forward(self, input):
         # input.shape = [BatchSize, WindowSize, 1]
         input = input.permute(1, 0, 2)
@@ -78,14 +83,14 @@ class Self_Attention(nn.Module):
         Query1 = self.Query_Key_Value_1[0](input)
         Key1 = self.Query_Key_Value_1[1](input)
         Value1 = self.Query_Key_Value_1[2](input)
-        hidden, _ = self.Input_First_HiddenLayer(Query1, Key1, Value1)
+        hidden, _ = self.Input_First_HiddenLayer(Query1, Key1, Value1, attn_mask=self.mask)
         # hidden.shape = [WindowSize, BatchSize, HiddenSize]
         if self.num_layers > 1:
             for i, Second_And_Following_HiddenLayer in enumerate(self.Second_And_Following_HiddenLayer):
                 Query = self.List_of_Query_Key_Value[i][0](hidden)
                 Key = self.List_of_Query_Key_Value[i][1](hidden)
                 Value = self.List_of_Query_Key_Value[i][2](hidden)
-                hidden, _ = Second_And_Following_HiddenLayer(Query, Key, Value)
+                hidden, _ = Second_And_Following_HiddenLayer(Query, Key, Value, attn_mask=self.mask)
         # hidden.shape = [WindowSize, BatchSize, HiddenSize]
         hidden = hidden[-1]
         # hidden.shape = [BatchSize, HiddenSize]
@@ -129,7 +134,7 @@ def train_under_config_and_evaluating_at_num_epochs_list(forex_data,
     validation_dataloader = DataLoader(validation_dataset, batch_size=batch_sizes, shuffle=False)
     
     # model
-    model = Self_Attention(num_hidden_layers, num_hidden_sizes).double()
+    model = Self_Attention(num_hidden_layers, num_hidden_sizes, length_input_sequence).double()
     # criterion & optimizer
     criterion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters())
