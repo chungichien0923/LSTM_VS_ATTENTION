@@ -151,6 +151,7 @@ def train_under_config_and_evaluating_at_num_epochs_list(forex_data,
                 min_valid_loss_at_best_epoch = valid_loss
                 min_valid_loss_epoch = epoch + 1
     
+    del model
     return min_valid_loss_epoch, min_valid_loss_at_best_epoch
 
 # %%
